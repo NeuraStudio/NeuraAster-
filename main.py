@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Security, Depends
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel
 from typing import List
-import requests
+import httpx
 import secrets
 import string
 import sqlite3
@@ -13,7 +13,6 @@ app = FastAPI(title="NeuraAster API Gateway", description="Custom API by Javed")
 # ==========================================
 # 1. SETUP & CONFIGURATION (SECURE)
 # ==========================================
-# अब टोकन सीधे कोड में नहीं है, यह Render के सिक्योर सर्वर से अपने आप उठेगा
 HF_SECRET_TOKEN = os.getenv("HF_SECRET_TOKEN")
 HF_API_URL = "https://api-inference.huggingface.co/models/Developer786/NeuraAster"
 
@@ -80,7 +79,7 @@ async def get_api_key(api_key_header: str = Security(api_key_header)):
         raise HTTPException(status_code=403, detail="Invalid NS.na API Key.")
 
 # ==========================================
-# 5. GEMINI-STYLE FORMAT & ROUTING
+# 5. GEMINI-STYLE FORMAT & ROUTING (UPDATE: HTTPX ASYNC)
 # ==========================================
 class Part(BaseModel):
     text: str
@@ -94,7 +93,7 @@ class GeminiStyleRequest(BaseModel):
     temperature: float = 0.3
 
 @app.post("/v1/models/neuraaster:generateContent")
-def generate_content(req: GeminiStyleRequest, api_key: str = Depends(get_api_key)):
+async def generate_content(req: GeminiStyleRequest, api_key: str = Depends(get_api_key)):
     try:
         user_prompt = req.contents[0].parts[0].text
         full_prompt = f"System: You are NeuraAster by Neura Studio.\nUser: {user_prompt}\nAssistant:"
@@ -102,12 +101,19 @@ def generate_content(req: GeminiStyleRequest, api_key: str = Depends(get_api_key
         hf_headers = {"Authorization": f"Bearer {HF_SECRET_TOKEN}"}
         hf_payload = {"inputs": full_prompt, "parameters": {"max_new_tokens": 1024}}
         
-        response = requests.post(HF_API_URL, headers=hf_headers, json=hf_payload)
+        # httpx का इस्तेमाल (120 सेकंड का टाइमआउट ताकि बड़ी फाइल लोड हो सके)
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(HF_API_URL, headers=hf_headers, json=hf_payload)
+            
         res_data = response.json()
         
+        # रिस्पॉन्स को समझना
         if isinstance(res_data, list) and len(res_data) > 0:
-            ai_reply = res_data[0].get("generated_text", "Error parsing response")
+            ai_reply = res_data[0].get("generated_text", str(res_data))
             ai_reply = ai_reply.replace(full_prompt, "").strip()
+        elif isinstance(res_data, dict) and "error" in res_data:
+            # अगर Hugging Face की तरफ से कोई एरर आता है
+            ai_reply = f"[Hugging Face System]: {res_data['error']}"
         else:
             ai_reply = str(res_data)
 

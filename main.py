@@ -7,7 +7,6 @@ import secrets
 import string
 import sqlite3
 import os
-import traceback
 
 app = FastAPI(title="NeuraAster API Gateway", description="Custom API by Javed")
 
@@ -15,10 +14,11 @@ app = FastAPI(title="NeuraAster API Gateway", description="Custom API by Javed")
 # 1. SETUP & CONFIGURATION (SECURE)
 # ==========================================
 HF_SECRET_TOKEN = os.getenv("HF_SECRET_TOKEN")
-MODEL_ID = "Developer786/NeuraAster"
 
-# Hugging Face क्लाइंट
-client = InferenceClient(model=MODEL_ID, token=HF_SECRET_TOKEN)
+# बैकएंड इंजन: Hugging Face का ऑफिशियल सपोर्टेड 8B मॉडल
+ENGINE_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
+
+client = InferenceClient(model=ENGINE_MODEL, token=HF_SECRET_TOKEN)
 
 API_KEY_NAME = "Authorization"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
@@ -83,7 +83,7 @@ async def get_api_key(api_key_header: str = Security(api_key_header)):
         raise HTTPException(status_code=403, detail="Invalid NS.na API Key.")
 
 # ==========================================
-# 5. GEMINI-STYLE FORMAT & ROUTING
+# 5. GEMINI-STYLE FORMAT & ROUTING (NEURAASTER)
 # ==========================================
 class Part(BaseModel):
     text: str
@@ -100,21 +100,37 @@ class GeminiStyleRequest(BaseModel):
 def generate_content(req: GeminiStyleRequest, api_key: str = Depends(get_api_key)):
     try:
         user_prompt = req.contents[0].parts[0].text
-        full_prompt = f"System: You are NeuraAster by Neura Studio.\nUser: {user_prompt}\nAssistant:"
         
-        # Hugging Face से जनरेट करना
-        ai_reply = client.text_generation(
-            prompt=full_prompt,
-            max_new_tokens=512,
+        # Chat completion API का इस्तेमाल जो सबसे स्टेबल और फास्ट है
+        messages = [
+            {
+                "role": "system", 
+                "content": "You are NeuraAster, a highly capable and intelligent AI assistant developed by Neura Studio. Always be helpful, precise, and polite."
+            },
+            {
+                "role": "user", 
+                "content": user_prompt
+            }
+        ]
+        
+        response = client.chat_completion(
+            messages=messages,
+            max_tokens=512,
             temperature=req.temperature
         )
+        
+        ai_reply = response.choices[0].message.content
 
         return {
-            "candidates": [{"content": {"role": "model", "parts": [{"text": ai_reply.strip()}]}}],
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": ai_reply.strip()}]
+                    }
+                }
+            ],
             "model_version": "NeuraAster-8B"
         }
     except Exception as e:
-        error_msg = repr(e)
-        if hasattr(e, 'response') and hasattr(e.response, 'text'):
-            error_msg += f" | HF Response: {e.response.text}"
-        raise HTTPException(status_code=500, detail=error_msg)
+        raise HTTPException(status_code=500, detail=str(e))

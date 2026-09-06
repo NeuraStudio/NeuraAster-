@@ -7,6 +7,7 @@ import secrets
 import string
 import sqlite3
 import os
+import traceback
 
 app = FastAPI(title="NeuraAster API Gateway", description="Custom API by Javed")
 
@@ -14,10 +15,9 @@ app = FastAPI(title="NeuraAster API Gateway", description="Custom API by Javed")
 # 1. SETUP & CONFIGURATION (SECURE)
 # ==========================================
 HF_SECRET_TOKEN = os.getenv("HF_SECRET_TOKEN")
-# तुम्हारा मॉडल रिपो
 MODEL_ID = "Developer786/NeuraAster"
 
-# Hugging Face का ऑफिशियल क्लाइंट
+# Hugging Face क्लाइंट
 client = InferenceClient(model=MODEL_ID, token=HF_SECRET_TOKEN)
 
 API_KEY_NAME = "Authorization"
@@ -102,10 +102,10 @@ def generate_content(req: GeminiStyleRequest, api_key: str = Depends(get_api_key
         user_prompt = req.contents[0].parts[0].text
         full_prompt = f"System: You are NeuraAster by Neura Studio.\nUser: {user_prompt}\nAssistant:"
         
-        # Hugging Face Client से टेक्स्ट जनरेट करना
+        # Hugging Face से जनरेट करना
         ai_reply = client.text_generation(
             prompt=full_prompt,
-            max_new_tokens=1024,
+            max_new_tokens=512,
             temperature=req.temperature
         )
 
@@ -114,4 +114,7 @@ def generate_content(req: GeminiStyleRequest, api_key: str = Depends(get_api_key
             "model_version": "NeuraAster-8B"
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = repr(e)
+        if hasattr(e, 'response') and hasattr(e.response, 'text'):
+            error_msg += f" | HF Response: {e.response.text}"
+        raise HTTPException(status_code=500, detail=error_msg)

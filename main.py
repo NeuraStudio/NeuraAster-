@@ -8,16 +8,19 @@ import string
 import sqlite3
 import os
 
-app = FastAPI(title="NeuraAster API Gateway")
+app = FastAPI(title="NeuraAster API Gateway", description="Custom API Gateway")
 
 # ==========================================
-# यहाँ अपना Kaggle वाला Cloudflare लिंक डालें!
+# 1. KAGGLE ENGINE URL (Cloudflare Tunnel)
 # ==========================================
-KAGGLE_ENGINE_URL = "https://तुम्हारा-क्लाउडफ्लेयर-लिंक.trycloudflare.com/generate"
+KAGGLE_ENGINE_URL = "https://hourly-euros-proposition-lands.trycloudflare.com/generate"
 
 API_KEY_NAME = "Authorization"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
+# ==========================================
+# 2. DATABASE FOR CUSTOM API KEYS
+# ==========================================
 def init_db():
     conn = sqlite3.connect('neura_keys.db')
     c = conn.cursor()
@@ -27,6 +30,9 @@ def init_db():
 
 init_db()
 
+# ==========================================
+# 3. GENERATE UNLIMITED "NS.na-" KEYS
+# ==========================================
 class UserData(BaseModel):
     user_id: str
 
@@ -46,11 +52,15 @@ def generate_api_key(data: UserData):
     finally:
         conn.close()
         
-    return {"user": data.user_id, "api_key": new_api_key}
+    return {"user": data.user_id, "api_key": new_api_key, "message": "Key successfully generated!"}
 
+# ==========================================
+# 4. SECURITY CHECK (Key Validation)
+# ==========================================
 async def get_api_key(api_key_header: str = Security(api_key_header)):
     if not api_key_header:
-        raise HTTPException(status_code=403, detail="API Key missing.")
+        raise HTTPException(status_code=403, detail="API Key missing. Format: NS.na-xxx")
+    
     clean_key = api_key_header.replace("Bearer ", "").strip()
     
     conn = sqlite3.connect('neura_keys.db')
@@ -61,8 +71,12 @@ async def get_api_key(api_key_header: str = Security(api_key_header)):
     
     if result:
         return clean_key
-    raise HTTPException(status_code=403, detail="Invalid NS.na API Key.")
+    else:
+        raise HTTPException(status_code=403, detail="Invalid NS.na API Key.")
 
+# ==========================================
+# 5. GEMINI-STYLE FORMAT & ROUTING TO KAGGLE
+# ==========================================
 class Part(BaseModel):
     text: str
 
@@ -76,23 +90,23 @@ class GeminiStyleRequest(BaseModel):
 
 @app.post("/v1/models/neuraaster:generateContent")
 async def generate_content(req: GeminiStyleRequest, api_key: str = Depends(get_api_key)):
-    user_prompt = req.contents[0].parts[0].text
-    full_prompt = f"System: You are NeuraAster by Neura Studio.\\nUser: {user_prompt}\\nAssistant:"
-    
     try:
+        user_prompt = req.contents[0].parts[0].text
+        full_prompt = f"System: You are NeuraAster by Neura Studio.\\nUser: {user_prompt}\\nAssistant:"
+        
+        # Render से Kaggle (Cloudflare Tunnel) को रिक्वेस्ट भेजना
         async with httpx.AsyncClient(timeout=120.0) as client:
-            # Render से सीधा Kaggle को रिक्वेस्ट भेजना
             response = await client.post(
                 KAGGLE_ENGINE_URL, 
                 json={"prompt": full_prompt, "temperature": req.temperature}
             )
             
         res_data = response.json()
-        ai_reply = res_data.get("reply", "[Error generating text]")
+        ai_reply = res_data.get("reply", "[Error generating text from Kaggle]")
 
         return {
-            "candidates": [{"content": {"role": "model", "parts": [{"text": ai_reply}]}}],
+            "candidates": [{"content": {"role": "model", "parts": [{"text": ai_reply.strip()}]}}],
             "model_version": "NeuraAster-8B"
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Kaggle Engine Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Kaggle Connection Error: {str(e)}")
